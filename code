@@ -1,0 +1,164 @@
+#include <ESP32Servo.h>
+#include <Adafruit_MQTT.h>
+#include <Adafruit_MQTT_Client.h>
+#include <LiquidCrystal_I2C.h>
+#include <WiFi.h>
+
+#define TRIGGER_PIN    5
+#define ECHO_PIN       18
+#define SERVO_PIN_1    2
+#define SERVO_PIN_2    4
+#define IR_SMALL_1_PIN 34
+#define IR_SMALL_2_PIN 35
+#define IR_BIG_1_PIN   32
+#define IR_BIG_2_PIN   33
+#define SERVO_START    10
+#define SERVO_START1   180
+#define SERVO_END      100
+#define SERVO_DELAY    15
+#define WAIT_TIME      10000
+
+Servo servo1;
+Servo servo2;
+
+int irSmall1Pin = IR_SMALL_1_PIN;
+int irSmall2Pin = IR_SMALL_2_PIN;
+int irBig1Pin = IR_BIG_1_PIN;
+int irBig2Pin = IR_BIG_2_PIN;
+
+#define AIO_SERVER      "io.adafruit.com"
+#define AIO_SERVERPORT  1883
+#define AIO_USERNAME    "carparking0001"
+
+
+WiFiClient client;
+Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
+
+Adafruit_MQTT_Publish slot1Pub = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/slot1");
+Adafruit_MQTT_Publish slot2Pub = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/slot2");
+Adafruit_MQTT_Publish slot3Pub = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/slot3");
+Adafruit_MQTT_Publish slot4Pub = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/slot4");
+
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Set the LCD I2C address and dimensions
+
+void setup() {
+  Serial.begin(9600);
+  WiFi.begin("iotproject1","iotproject1");
+  pinMode(TRIGGER_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(irSmall1Pin, INPUT);
+  pinMode(irSmall2Pin, INPUT);
+  pinMode(irBig1Pin, INPUT);
+  pinMode(irBig2Pin, INPUT);
+
+  // LCD setup
+  lcd.init();                      // Initialize the LCD
+  lcd.backlight();                 // Turn on backlight
+
+  servo1.attach(SERVO_PIN_1);
+  servo2.attach(SERVO_PIN_2);
+  servo1.write(180);
+  servo2.write(10);
+
+  // Connect to Adafruit MQTT
+  connectAdafruitMQTT();
+}
+
+void loop() {
+  long duration, distance;
+
+  // Measure distance
+  digitalWrite(TRIGGER_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIGGER_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIGGER_PIN, LOW);
+  duration = pulseIn(ECHO_PIN, HIGH);
+  distance = duration * 0.034 / 2;
+
+  Serial.print("Distance: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+
+  // Move servos based on distance
+  if (distance < 13)
+    moveServo1(servo1);
+  else if (distance >= 13 && distance < 16)
+    moveServo2(servo2);
+  else {
+    resetServos();
+    delay(WAIT_TIME);
+  }
+
+  // Check IR sensors for available slots
+  int smallCarsDetected1 = detectCar(irSmall1Pin);
+  int smallCarsDetected2 = detectCar(irSmall2Pin);
+  int bigCarsDetected1 = detectCar(irBig1Pin);
+  int bigCarsDetected2 = detectCar(irBig2Pin);
+
+  int smallCarSlotsAvailable = 2 - (smallCarsDetected1 + smallCarsDetected2);
+  int bigCarSlotsAvailable = 2 - (bigCarsDetected1 + bigCarsDetected2);
+
+  Serial.print("Small car slots available: ");
+  Serial.println(smallCarSlotsAvailable);
+
+  Serial.print("Big car slots available: ");
+  Serial.println(bigCarSlotsAvailable);
+
+  // Publish data to Adafruit IO
+  slot1Pub.publish(smallCarsDetected1);
+  slot2Pub.publish(smallCarsDetected2);
+  slot3Pub.publish(bigCarsDetected1);
+  slot4Pub.publish(bigCarsDetected2);
+
+  // Display count of available slots on LCD
+  lcd.clear(); // Clear the display
+  
+  lcd.print("Small Cars: ");
+  lcd.print(smallCarSlotsAvailable);
+  
+  lcd.print("Big Cars: ");
+  lcd.print(bigCarSlotsAvailable);
+
+  delay(WAIT_TIME);
+  resetServos();
+}
+
+void moveServo1(Servo servo) {
+   
+  for (int pos = 180; pos >= 100; pos--) {
+    servo.write(pos);
+    delay(SERVO_DELAY);
+  }
+}
+
+void moveServo2(Servo servo) {
+   
+  for (int pos = SERVO_START; pos <= SERVO_END; pos++) {
+    servo.write(pos);
+    delay(SERVO_DELAY);
+  }
+}
+
+void resetServos() {
+  servo1.write(SERVO_START1);
+  servo2.write(SERVO_START);
+}
+
+int detectCar(int irPin) {
+  return digitalRead(irPin) == LOW ? 1 : 0;
+}
+
+void connectAdafruitMQTT() {
+  int8_t ret;
+
+  while ((ret = mqtt.connect()) != 0) {
+    Serial.println(mqtt.connectErrorString(ret));
+    Serial.println("Retrying Adafruit MQTT connection...");
+    delay(5000);
+  }
+
+  Serial.println("Adafruit MQTT Connected!");
+}
+
+
